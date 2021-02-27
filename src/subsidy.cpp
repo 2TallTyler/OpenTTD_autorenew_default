@@ -9,6 +9,7 @@
 
 #include "stdafx.h"
 #include "company_func.h"
+#include "company_base.h"
 #include "industry.h"
 #include "town.h"
 #include "news_func.h"
@@ -32,6 +33,23 @@
 SubsidyPool _subsidy_pool("Subsidy"); ///< Pool for the subsidies.
 INSTANTIATE_POOL_METHODS(Subsidy)
 
+
+/**
+ * Calculates the duration of subsidy contracts awarded to a particular company, depending on that company's score (matching HQ stages).
+ * @param The company whose subsidy is being calculated.
+ * @return A multiplier to the minimum 12-month subsidy duration
+ */
+static uint CalculateSubsidyContractDuration(CompanyID company) {
+	uint score = UpdateCompanyRatingAndValue(Company::GetIfValid(company), false);
+	uint mult = 1;
+	if (score <= 170) mult++;
+	if (score <= 350) mult++;
+	if (score <= 520) mult++;
+	if (score <= 720) mult++;
+
+	return mult;
+}
+
 /**
  * Marks subsidy as awarded, creates news and AI event
  * @param company awarded company
@@ -41,7 +59,7 @@ void Subsidy::AwardTo(CompanyID company)
 	assert(!this->IsAwarded());
 
 	this->awarded = company;
-	this->remaining = SUBSIDY_CONTRACT_MONTHS;
+	this->remaining = SUBSIDY_CONTRACT_MONTHS * CalculateSubsidyContractDuration(company);
 
 	char company_name[MAX_LENGTH_COMPANY_NAME_CHARS * MAX_CHAR_LENGTH];
 	SetDParam(0, company);

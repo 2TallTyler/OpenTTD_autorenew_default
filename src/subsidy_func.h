@@ -15,6 +15,7 @@
 #include "company_type.h"
 #include "cargo_type.h"
 
+static uint CalculateSubsidyContractDuration(CompanyID company);
 Pair SetupSubsidyDecodeParam(const struct Subsidy *s, bool mode);
 void DeleteSubsidyWith(SourceType type, SourceID index);
 bool CheckSubsidised(CargoID cargo_type, CompanyID company, SourceType src_type, SourceID src, const Station *st);
