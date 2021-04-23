@@ -189,12 +189,12 @@ static bool CheckSubsidyDuplicate(CargoID cargo, SourceType src_type, SourceID s
  * @param dst      Index of destination.
  * @return True if they are inside the distance limit.
  */
-static bool CheckSubsidyDistance(SourceType src_type, SourceID src, SourceType dst_type, SourceID dst)
+static bool CheckSubsidyDistance(SourceType src_type, SourceID src, SourceType dst_type, SourceID dst, uint max_distance)
 {
 	TileIndex tile_src = (src_type == ST_TOWN) ? Town::Get(src)->xy : Industry::Get(src)->location.tile;
 	TileIndex tile_dst = (dst_type == ST_TOWN) ? Town::Get(dst)->xy : Industry::Get(dst)->location.tile;
 
-	return (DistanceManhattan(tile_src, tile_dst) <= SUBSIDY_MAX_DISTANCE);
+	return (DistanceManhattan(tile_src, tile_dst) <= max_distance);
 }
 
 /**
@@ -286,7 +286,7 @@ CommandCost CmdCreateSubsidy(TileIndex tile, DoCommandFlag flags, uint32 p1, uin
  * Tries to create a passenger subsidy between two towns.
  * @return True iff the subsidy was created.
  */
-bool FindSubsidyPassengerRoute()
+bool FindSubsidyPassengerRoute(uint max_distance)
 {
 	if (!Subsidy::CanAllocateItem()) return false;
 
@@ -300,8 +300,9 @@ bool FindSubsidyPassengerRoute()
 	if (dst->cache.population < SUBSIDY_PAX_MIN_POPULATION || src == dst) {
 		return false;
 	}
-
 	if (DistanceManhattan(src->xy, dst->xy) > SUBSIDY_MAX_DISTANCE) return false;
+
+	if (!CheckSubsidyDistance(ST_TOWN, src->index, ST_TOWN, dst->index, max_distance)) return false;
 	if (CheckSubsidyDuplicate(CT_PASSENGERS, ST_TOWN, src->index, ST_TOWN, dst->index)) return false;
 
 	CreateSubsidy(CT_PASSENGERS, ST_TOWN, src->index, ST_TOWN, dst->index);
@@ -309,14 +310,13 @@ bool FindSubsidyPassengerRoute()
 	return true;
 }
 
-bool FindSubsidyCargoDestination(CargoID cid, SourceType src_type, SourceID src);
-
+bool FindSubsidyCargoDestination(CargoID cid, SourceType src_type, SourceID src, uint max_distance);
 
 /**
  * Tries to create a cargo subsidy with a town as source.
  * @return True iff the subsidy was created.
  */
-bool FindSubsidyTownCargoRoute()
+bool FindSubsidyTownCargoRoute(uint max_distance)
 {
 	if (!Subsidy::CanAllocateItem()) return false;
 
@@ -367,14 +367,14 @@ bool FindSubsidyTownCargoRoute()
 
 	SourceID src = src_town->index;
 
-	return FindSubsidyCargoDestination(cid, src_type, src);
+	return FindSubsidyCargoDestination(cid, src_type, src, max_distance);
 }
 
 /**
  * Tries to create a cargo subsidy with an industry as source.
  * @return True iff the subsidy was created.
  */
-bool FindSubsidyIndustryCargoRoute()
+bool FindSubsidyIndustryCargoRoute(uint max_distance)
 {
 	if (!Subsidy::CanAllocateItem()) return false;
 
@@ -416,7 +416,7 @@ bool FindSubsidyIndustryCargoRoute()
 
 	SourceID src = src_ind->index;
 
-	return FindSubsidyCargoDestination(cid, src_type, src);
+	return FindSubsidyCargoDestination(cid, src_type, src, max_distance);
 }
 
 /**
@@ -426,7 +426,7 @@ bool FindSubsidyIndustryCargoRoute()
  * @param src      Index of source.
  * @return True iff the subsidy was created.
  */
-bool FindSubsidyCargoDestination(CargoID cid, SourceType src_type, SourceID src)
+bool FindSubsidyCargoDestination(CargoID cid, SourceType src_type, SourceID src, uint max_distance)
 {
 	/* Choose a random destination. */
 	SourceType dst_type = Chance16(1, 2) ? ST_TOWN : ST_INDUSTRY;
@@ -473,7 +473,7 @@ bool FindSubsidyCargoDestination(CargoID cid, SourceType src_type, SourceID src)
 	if (src_type == dst_type && src == dst) return false;
 
 	/* Check distance between source and destination. */
-	if (!CheckSubsidyDistance(src_type, src, dst_type, dst)) return false;
+	if (!CheckSubsidyDistance(src_type, src, dst_type, dst, max_distance)) return false;
 
 	/* Avoid duplicate subsidies. */
 	if (CheckSubsidyDuplicate(cid, src_type, src, dst_type, dst)) return false;
@@ -525,27 +525,44 @@ void SubsidyMonthlyLoop()
 
 	int random_chance = RandomRange(16);
 
+	/* We'll try creating a subsidy with the usual maximum distance 500 times.
+	 * If that fails, we'll quadruple the distance limit and try another 500 times, to account for low town or industry density settings. */
+	uint8 multiplier = 4;
+	uint16 tries = 500;
+
 	if (random_chance < 2 && _settings_game.linkgraph.distribution_pax == DT_MANUAL) {
 		/* There is a 1/8 chance each month of generating a passenger subsidy. */
-		int n = 1000;
-
 		do {
-			passenger_subsidy = FindSubsidyPassengerRoute();
-		} while (!passenger_subsidy && n--);
+			passenger_subsidy = FindSubsidyPassengerRoute(SUBSIDY_MAX_DISTANCE);
+		} while (!passenger_subsidy && tries--);
+
+		/* If a subsidy is not found after 500 tries, increase the max distance and try again */
+		tries = 500;
+		while (!passenger_subsidy && tries--) {
+			passenger_subsidy = FindSubsidyPassengerRoute(SUBSIDY_MAX_DISTANCE * multiplier);
+		}
 	} else if (random_chance == 2) {
 		/* Cargo subsidies with a town as a source have a 1/16 chance. */
-		int n = 1000;
-
 		do {
-			town_subsidy = FindSubsidyTownCargoRoute();
-		} while (!town_subsidy && n--);
+			town_subsidy = FindSubsidyTownCargoRoute(SUBSIDY_MAX_DISTANCE);
+		} while (!town_subsidy && tries--);
+
+		/* If a subsidy is not found after 500 tries, increase the max distance and try again */
+		tries = 500;
+		while (!town_subsidy && tries--) {
+			town_subsidy = FindSubsidyTownCargoRoute(SUBSIDY_MAX_DISTANCE * multiplier);
+		}
 	} else if (random_chance == 3) {
 		/* Cargo subsidies with an industry as a source have a 1/16 chance. */
-		int n = 1000;
-
 		do {
-			industry_subsidy = FindSubsidyIndustryCargoRoute();
-		} while (!industry_subsidy && n--);
+			industry_subsidy = FindSubsidyIndustryCargoRoute(SUBSIDY_MAX_DISTANCE);
+		} while (!industry_subsidy && tries--);
+
+		/* If a subsidy is not found after 500 tries, increase the max distance and try again */
+		tries = 500;
+		while (!industry_subsidy && tries--) {
+			industry_subsidy = FindSubsidyIndustryCargoRoute(SUBSIDY_MAX_DISTANCE * multiplier);
+		}
 	}
 
 	modified |= passenger_subsidy || town_subsidy || industry_subsidy;
